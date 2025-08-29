@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Генератор Бизнес-Рекомендаций</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .transition-all { transition: all .3s ease-in-out; }
+    .loader { border-top-color:#3498db; animation:spin 1s linear infinite; }
+    @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+    .invalid-field { border-color:#ef4444 !important; box-shadow:0 0 0 2px rgba(239,68,68,.2); }
+  </style>
+</head>
+<body class="bg-gray-50 font-sans text-gray-800">
+  <div class="container mx-auto p-4 sm:p-6 md:p-8 max-w-4xl">
+    <div class="bg-white rounded-2xl shadow-lg p-6 sm:p-8">
+      <header class="mb-8 text-center">
+        <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">Генератор бизнес-рекомендаций</h1>
+        <p class="text-gray-500 mt-2">Введите данные вашей компании, чтобы получить персональные советы по развитию</p>
+      </header>
+
+      <form id="recommendationForm" novalidate>
+        <!-- Секция 1 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div>
+            <label for="companyName" class="block text-sm font-medium text-gray-700 mb-1">Название компании</label>
+            <input id="companyName" type="text" value="ООО Пример" required
+                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all">
+          </div>
+          <div>
+            <label for="industry" class="block text-sm font-medium text-gray-700 mb-1">Отрасль</label>
+            <input id="industry" type="text" value="retail" required
+                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all">
+          </div>
+          <div>
+            <label for="region" class="block text-sm font-medium text-gray-700 mb-1">Регион (ISO 3166-1 alpha-2)</label>
+            <input id="region" type="text" value="RU" required maxlength="2"
+                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all">
+          </div>
+        </div>
+
+        <!-- Секция 2: свободное описание (ПОКА НЕ ОТПРАВЛЯЕМ В API) -->
+        <div class="mb-8">
+          <label for="businessDescription" class="block text-lg font-semibold text-gray-800 mb-3">
+            Описание вашего бизнеса <span class="text-sm font-normal text-gray-500">(необязательно)</span>
+          </label>
+          <textarea id="businessDescription" rows="4"
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            placeholder="Например: сеть кофеен, сильная сторона — качество, проблема — узнаваемость бренда..."></textarea>
+          <p class="text-xs text-gray-500 mt-1">Поддержка этого поля в API появится позже как <code>context</code>.</p>
+        </div>
+
+        <!-- Секция 3 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+          <div>
+            <label class="block text-lg font-semibold text-gray-800 mb-3">Ключевые цели</label>
+            <div id="goalsContainer" class="flex flex-wrap gap-4"></div>
+          </div>
+          <div>
+            <label class="block text-lg font-semibold text-gray-800 mb-3">Модели анализа</label>
+            <div id="modelsContainer" class="grid grid-cols-2 gap-4"></div>
+          </div>
+        </div>
+
+        <div class="text-center">
+          <button type="submit" id="submitButton"
+                  class="w-full md:w-auto bg-blue-600 text-white font-bold py-3 px-12 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 transition-all transform hover:scale-105">
+            Получить рекомендации
+          </button>
+        </div>
+      </form>
+
+      <!-- Результаты -->
+      <div id="results" class="mt-10">
+        <div id="loader" class="hidden flex-col items-center justify-center text-center py-8">
+          <div class="loader h-12 w-12 rounded-full border-4 border-gray-200 border-t-4"></div>
+          <p class="mt-4 text-gray-600">Анализируем данные, это может занять до 30 секунд...</p>
+        </div>
+        <div id="error" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg" role="alert"></div>
+        <div id="resultsContent" class="hidden space-y-8"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // --- CONFIG ---
+      const API_ENDPOINT = 'https://api.bizleosal.ru/v1/ai/complete';
+      const REQUEST_TIMEOUT = 30000;
+      const ANALYSIS_MODELS = ["swot","pestel","porter","bcg","value_chain","canvas","unit_economics","bsc"];
+      const GOALS = [
+        { value: "рост выручки", label: "Рост выручки", checked: true },
+        { value: "снижение издержек", label: "Снижение издержек", checked: true },
+        { value: "увеличение доли рынка", label: "Увеличение доли рынка", checked: false },
+      ];
+
+      // --- DOM ---
+      const form = document.getElementById('recommendationForm');
+      const submitButton = document.getElementById('submitButton');
+      const loader = document.getElementById('loader');
+      const errorContainer = document.getElementById('error');
+      const resultsContent = document.getElementById('resultsContent');
+      const modelsContainer = document.getElementById('modelsContainer');
+      const goalsContainer = document.getElementById('goalsContainer');
+      const allInputs = Array.from(form.querySelectorAll('input, textarea'));
+
+      // --- utils ---
+      const esc = (s) => String(s ?? '').replace(/[&<>"'`=\/]/g, t => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'})[t]);
+      const renderCheckbox = ({ name, value, label, checked, idPrefix='' }) => {
+        const id = `${idPrefix}${value.replace(/\s+/g,'-')}`;
+        return `<label for="${id}" class="flex items-center space-x-2 cursor-pointer">
+          <input id="${id}" type="checkbox" name="${name}" value="${value}" class="h-5 w-5 text-blue-600 focus:ring-blue-500" ${checked?'checked':''}>
+          <span class="text-gray-700">${label}</span>
+        </label>`;
+      };
+      const withTimeout = async (fetchFactory, ms) => {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), ms);
+        try {
+          return await fetchFactory(controller.signal);
+        } catch (e) {
+          if (controller.signal.aborted) throw new Error('Таймаут запроса');
+          throw e;
+        } finally {
+          clearTimeout(t);
+        }
+      };
+      const clearValidation = () => {
+        allInputs.forEach(el => el.classList.remove('invalid-field'));
+        errorContainer.classList.add('hidden');
+      };
+      const showError = (msg) => {
+        errorContainer.innerHTML = `<p class="font-bold">Что-то пошло не так</p><p>${esc(msg)}</p>`;
+        errorContainer.classList.remove('hidden');
+        resultsContent.classList.add('hidden');
+      };
+
+      // --- render initial checkboxes ---
+      modelsContainer.innerHTML = ANALYSIS_MODELS.map(m => renderCheckbox({name:'models', value:m, label:m.toUpperCase(), checked:true, idPrefix:'m_'})).join('');
+      goalsContainer.innerHTML  = GOALS.map(g => renderCheckbox({name:'goals', value:g.value, label:g.label, checked:g.checked})).join('');
+
+      // --- results renderer ---
+      const showResults = (data) => {
+        resultsContent.innerHTML = '';
+        let added = false;
+
+        if (Array.isArray(data.items) && data.items.length) {
+          added = true;
+          const cards = data.items.map(it => {
+            const steps = Array.isArray(it.steps) && it.steps.length
+              ? `<ul class="list-disc list-inside mt-2 space-y-1">${it.steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>` : '';
+            return `<div class="bg-gray-50 p-4 rounded-lg border">
+              <div class="text-xs text-gray-500 mb-1">Модель: <strong>${esc(it.area)}</strong> • Приоритет: <strong>${esc(it.priority)}</strong></div>
+              <h3 class="font-semibold text-lg text-blue-700">${esc(it.title)}</h3>
+              <p class="text-gray-700 mt-1">${esc(it.rationale)}</p>
+              ${steps}
+              <div class="text-xs text-gray-500 mt-2">Влияние (Impact): <strong>${esc(it.impact)}/5</strong> • Сложность (Effort): <strong>${esc(it.effort)}/5</strong></div>
+            </div>`;
+          }).join('');
+          resultsContent.insertAdjacentHTML('beforeend', `<section>
+            <h2 class="text-2xl font-bold mb-4 border-b pb-2">💡 Рекомендации</h2>
+            <div class="space-y-4">${cards}</div>
+          </section>`);
+        }
+
+        if (Array.isArray(data.kpis) && data.kpis.length) {
+          added = true;
+          const list = data.kpis.map(k => `<li><span class="font-semibold">${esc(k.name)}</span>: ${esc(k.target)}</li>`).join('');
+          resultsContent.insertAdjacentHTML('beforeend', `<section>
+            <h2 class="text-2xl font-bold mb-4 border-b pb-2">📊 Ключевые показатели (KPI)</h2>
+            <ul class="list-disc list-inside ml-2 space-y-1">${list}</ul>
+          </section>`);
+        }
+
+        if (data.meta) {
+          added = true;
+          resultsContent.insertAdjacentHTML('beforeend', `<section>
+            <h2 class="text-2xl font-bold mb-4 border-b pb-2">⚙️ Мета-информация</h2>
+            <div class="bg-gray-50 p-4 rounded-lg border text-sm text-gray-600 space-y-1">
+              <p><strong>Версия API:</strong> ${esc(data.meta.version ?? '1.0.0')}</p>
+              <p><strong>Сгенерировано:</strong> ${esc(data.meta.generated_at ?? '—')}</p>
+              <p><strong>Модель:</strong> ${esc(data.meta.model ?? '—')}</p>
+              <p><strong>Trace ID:</strong> ${esc(data.meta.trace_id ?? '—')}</p>
+            </div>
+          </section>`);
+        }
+
+        if (!added) {
+          showError('Пустой ответ сервера.');
+          return;
+        }
+        resultsContent.classList.remove('hidden');
+      };
+
+      // --- validation ---
+      const validateForm = () => {
+        clearValidation();
+        const rules = [
+          { id:'companyName', test: v => !!v.trim(), msg:'Введите название компании.' },
+          { id:'industry',    test: v => !!v.trim(), msg:'Укажите отрасль.' },
+          { id:'region',      test: v => /^[A-Z]{2}$/.test(v.trim().toUpperCase()), msg:'Регион в формате ISO-2, например RU.' },
+          { name:'goals',     test: () => form.querySelectorAll('input[name="goals"]:checked').length > 0,  msg:'Выберите хотя бы одну цель.' },
+          { name:'models',    test: () => form.querySelectorAll('input[name="models"]:checked').length > 0, msg:'Выберите хотя бы одну модель анализа.' },
+        ];
+        for (const r of rules) {
+          const el = r.id ? document.getElementById(r.id) : form.querySelector(`input[name="${r.name}"]`);
+          const val = r.id ? el.value : null;
+          if (!r.test(val)) {
+            if (r.id) el.classList.add('invalid-field');
+            showError(r.msg);
+            return false;
+          }
+        }
+        return true;
+      };
+
+      // --- submit ---
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!validateForm()) return;
+
+        loader.classList.remove('hidden');
+        resultsContent.classList.add('hidden');
+        errorContainer.classList.add('hidden');
+        submitButton.disabled = true;
+        submitButton.textContent = 'Обработка…';
+
+        // генерим id запроса для идемпотентности и корреляции
+        const requestId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+
+        const body = {
+          company: {
+            name: document.getElementById('companyName').value.trim(),
+            industry: document.getElementById('industry').value.trim(),
+            region: document.getElementById('region').value.trim().toUpperCase()
+          },
+          goals: Array.from(document.querySelectorAll('input[name="goals"]:checked')).map(el => el.value),
+          models: Array.from(document.querySelectorAll('input[name="models"]:checked')).map(el => el.value),
+          limit: 5,
+          lang: 'ru',
+          client_request_id: requestId
+        };
+
+        try {
+          const res = await withTimeout(
+            (signal) => fetch(API_ENDPOINT, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept-Language': 'ru',
+                'X-Request-Id': requestId
+              },
+              body: JSON.stringify(body),
+              signal
+            }),
+            REQUEST_TIMEOUT
+          );
+
+          if (!res.ok) {
+            // пробуем problem+json
+            let msg = `HTTP ${res.status}`;
+            try {
+              const prob = await res.json();
+              if (prob?.detail) msg += `: ${prob.detail}`;
+              else if (prob?.title) msg += `: ${prob.title}`;
+            } catch {
+              const txt = await res.text().catch(()=> '');
+              if (txt) msg += `: ${txt}`;
+            }
+            throw new Error(msg);
+          }
+
+          const data = await res.json();
+          showResults(data);
+        } catch (err) {
+          showError(err.message || 'Сетевая ошибка');
+        } finally {
+          loader.classList.add('hidden');
+          submitButton.disabled = false;
+          submitButton.textContent = 'Получить рекомендации';
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+

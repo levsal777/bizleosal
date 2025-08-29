@@ -1,0 +1,61 @@
+networks:
+  nginx-proxy:
+    external: true
+  app-net: {}
+
+volumes:
+  pgdata: {}
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      TZ: "UCT"
+    volumes:
+      - pgdata::/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthceck:
+      test: ["CMD-SHELL","pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: myapp-backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
+      TZ: "UCT"
+      VIRTUAL_HOST: "${VIRTUAL_HOST}"
+      LETSENCRYPT_HOST: "${VIRTUAL_HOST}"
+      LETSENCRYPT_EMAIL: "${LETSENCRT_EMAIL}"
+      VIRTUAL_PORT: "8000"
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-net
+      - nginx-proxy
+    healthcheck:
+      test: ["CMD-SHELL","python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode()==200 else sys.exit(1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+®

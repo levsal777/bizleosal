@@ -1,0 +1,7 @@
+id,area,title,impact,effort,priority_score
+1,overall,"Запустить перформанс-маркетинг",5,3,100.0
+2,unit_economics,"Снизить COGS на 7%",4,2,100.0
+3,canvas,"Сузить ЦА и уточнить УТП",4,4,90.0
+4,overall,"Smoke",3,2,90.0
+5,overall,"Smoke",3,2,90.0
+6,overall,"Demo rec",3,2,90.0

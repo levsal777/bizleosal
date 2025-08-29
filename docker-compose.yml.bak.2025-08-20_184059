@@ -1,0 +1,74 @@
+networks:
+  nginx-proxy:          # внешняя сеть, созданная стеком реверс‑прокси
+    external: true
+  app-net: {}           # внутренняя сеть приложения
+
+volumes:
+  pgdata: {}            # персистентные данные Postgres
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    restart: always
+    env_file:
+      - .env            # ожидает POSTGRES_DB/USER/PASSWORD внутри .env
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      # При необходимости зафиксируйте кодировку:
+      # POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend           # ваш код бэкенда здесь
+      dockerfile: Dockerfile
+    container_name: myapp-backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      # ВАЖНО: укажите корректный DSN (или держите в .env)
+      # Пример: DATABASE_URL=postgresql://myapp:supersecret@db:5432/myapp
+      DATABASE_URL: "${DATABASE_URL}"
+
+      # Автоконфиг для nginx-proxy + acme-companion:
+      VIRTUAL_HOST: api.bizleosal.ru          # ЗАМЕНИТЕ на ваш API‑домен
+      VIRTUAL_PORT: "8000"
+      LETSENCRYPT_HOST: api.bizleosal.ru      # ЗАМЕНИТЕ на ваш API‑домен
+      LETSENCRYPT_EMAIL: you@example.com      # ЗАМЕНИТЕ на ваш email для LE
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONIOENCODING: UTF-8    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"                  # порт внутри контейнера; публикуется прокси
+    networks:
+      - app-net
+      - nginx-proxy
+    healthcheck:
+      # Убедитесь, что /health возвращает HTTP 200
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Если нужны ресурсы/логи:
+    # logging:
+    #   driver: json-file
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "5"
+

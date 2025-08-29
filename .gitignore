@@ -1,0 +1,14 @@
+# python
+__pycache__/
+*.pyc
+# editor temp
+*.bak
+*~
+\#*#
+*.swp
+*.swo
+# env
+.env
+.env.*
+# local config
+*.local

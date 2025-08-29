@@ -1,0 +1,40 @@
+# Секреты/локальные файлы
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Node/фронтенд-артефакты (на всякий случай)
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# VCS/IDE/OS
+.git
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Докер/компоуз-файлы в образ не нужны
+docker-compose.yml
+docker-compose*.yml
+

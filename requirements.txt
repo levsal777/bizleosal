@@ -1,0 +1,27 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+gunicorn==22.0.0
+psycopg[binary]==3.2.1
+# Если хотите асинхронный драйвер вместо psycopg[binary]:
+# asyncpg==0.29.0
+# --- Web framework ---
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+gunicorn==22.0.0   # только для продакшн запуска
+
+# --- PostgreSQL драйвер ---
+psycopg[binary]==3.2.1   # sync-драйвер
+# Если нужен async-драйвер — закомментируй psycopg и включи строку ниже:
+# asyncpg==0.29.0
+
+# --- ORM + миграции ---
+SQLAlchemy==2.0.30
+alembic==1.13.1
+
+# --- Валидация / модели ---
+pydantic==2.9.1
+python-dotenv==1.0.1   # удобно для локалки, в Docker не обязателен
+
+# --- Тестирование ---
+pytest==8.2.2
+httpx==0.27.0

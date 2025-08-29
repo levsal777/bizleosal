@@ -1,0 +1,67 @@
+# docker compose v2 файл без поля version (оно устарело)
+# Сети: внешняя для прокси и внутренняя для приложения
+networks:
+  nginx-proxy:
+    external: true
+  app-net: {}
+
+volumes:
+  pgdata:
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    restart: always
+    # Берём значения из .env (логин/пароль/имя базы)
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - app-net
+    # Автопроверка, что Postgres "жив"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend     # если у вас другой путь — укажите свой
+      dockerfile: Dockerfile
+    container_name: myapp-backend
+    restart: always
+    expose:
+      - "8000"               # внутренний порт приложения
+    # Подтягиваем все переменные из .env
+    env_file:
+      - .env
+    # Явно пробрасываем критичные переменные (на случай, если кто-то удалит env_file)
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"     # пример: postgresql://... или postgresql+asyncpg://...
+      SECRET_KEY: "${SECRET_KEY}"
+      VIRTUAL_HOST: "${APP_DOMAIN}"
+      VIRTUAL_PORT: "${VIRTUAL_PORT}"     # пример: 8000
+      LETSENCRYPT_HOST: "${LETSENCRYPT_HOST}"
+      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL}"
+    # Ждём, пока база будет "здоровой"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - nginx-proxy   # доступен прокси
+      - app-net       # видит базу db
+    # Автопроверка, что backend отвечает по /openapi.json
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+

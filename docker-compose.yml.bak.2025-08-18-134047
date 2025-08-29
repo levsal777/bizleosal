@@ -1,0 +1,62 @@
+version: '3.8'
+
+networks:
+  nginx-proxy:
+    external: true   # подключаемся к уже существующей сети прокси
+
+services:
+  backend:
+    build: ./backend
+    container_name: myapp-backend
+    restart: always
+    expose:
+      - "8000"       # порт внутри контейнера, который отдаём прокси
+    environment:
+      - VIRTUAL_HOST=api.bizleosal.ru     # домен, по которому будет доступен сервис
+      - LETSENCRYPT_HOST=api.bizleosal.ru # для выпуска сертификата
+      - LETSENCRYPT_EMAIL=leos23445@gmail.com
+      - VIRTUAL_PORT=8000                 # какой порт проксировать на бэкенде
+    networks: [nginx-proxy]
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+networks:
+  nginx-proxy:
+    external: true
+  app-net: {}             # внутренняя сеть только для backend ↔ db
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    restart: always
+    environment:
+      - POSTGRES_DB=myapp
+      - POSTGRES_USER=myapp
+      - POSTGRES_PASSWORD=supersecret    # замени на свой
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [app-net]                  # НЕ вешаем в публичную сеть
+
+  backend:
+    build: ./backend
+    container_name: myapp-backend
+    restart: always
+    expose:
+      - "8000"
+    environment:
+      - VIRTUAL_HOST=api.bizleosal.ru
+      - LETSENCRYPT_HOST=api.bizleosal.ru
+      - LETSENCRYPT_EMAIL=leos23445@gmail.com
+      - VIRTUAL_PORT=8000
+      - DATABASE_URL=postgresql://myapp:supersecret@db:5432/myapp
+    networks: [nginx-proxy, app-net]     # доступен и прокси, и базе
+    # healthcheck оставь как есть
+
+volumes:
+  pgdata:
+

@@ -1,0 +1,45 @@
+# docker compose v2 файл без поля version (оно устарело)
+# Сети: внешняя для прокси и внутренняя для приложения
+networks:
+  nginx-proxy:
+    external: true
+  app-net: {}
+
+volumes:
+  pgdata:
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    restart: always
+    environment:
+      - POSTGRES_DB=myapp
+      - POSTGRES_USER=myapp
+      - POSTGRES_PASSWORD=supersecret   # <-- замени на свой пароль
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - app-net
+
+  backend:
+    build: ./backend
+    container_name: myapp-backend
+    restart: always
+    expose:
+      - "8000"
+    environment:
+      - VIRTUAL_HOST=api.bizleosal.ru
+      - LETSENCRYPT_HOST=api.bizleosal.ru
+      - LETSENCRYPT_EMAIL=leos23445@gmail.com
+      - VIRTUAL_PORT=8000
+      - DATABASE_URL=postgresql://myapp:supersecret@db:5432/myapp
+    networks:
+      - nginx-proxy   # доступен прокси
+      - app-net       # видит базу db
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
