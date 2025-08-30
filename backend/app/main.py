@@ -88,6 +88,21 @@ app = FastAPI(
     servers=[{"url": "https://api.bizleosal.ru"}],
 )
 
+
+# --- API Key guard for /companies and /v1/companies ---
+API_KEY = os.getenv("API_KEY")
+
+@app.middleware("http")
+async def require_api_key_for_companies(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/companies") or path.startswith("/v1/companies"):
+        if not API_KEY:
+            return JSONResponse({"detail": "server_misconfigured: API_KEY not set"}, status_code=500)
+        if request.headers.get("x-api-key") != API_KEY:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+# --- end guard ---
+
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,

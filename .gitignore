@@ -12,3 +12,24 @@ __pycache__/
 .env.*
 # local config
 *.local
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Docker / локальные оверрайды
+docker-compose.override.yml
+*.log
+
+# Node (если есть фронт)
+node_modules/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
