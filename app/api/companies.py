@@ -1,3 +1,4 @@
+from app.services.recs_generator import _sanitize_item, _merge_weights_from_env, DEFAULT_AREA_WEIGHTS
 from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel, Field, conint
 from typing import Optional, List, Literal, Any, Dict
@@ -132,6 +133,25 @@ def create_analysis(company_id: int, body: AnalysisCreate, sort: str | None = Qu
 
 @router.post("/{company_id}/recommendations/bulk", response_model=List[RecommendationCreated])
 def create_recommendations_bulk(company_id: int, items: List[RecommendationIn], sort: str | None = Query(None, alias='sort')):
+    # --- sanitizer: normalize & re-score before saving ---
+    try:
+        weights = _merge_weights_from_env(DEFAULT_AREA_WEIGHTS)
+    except Exception:
+        weights = DEFAULT_AREA_WEIGHTS
+    _norm = []
+    for _obj in items:
+        try:
+            raw = _obj.model_dump()
+        except Exception:
+            try:
+                raw = _obj.dict()
+            except Exception:
+                raw = dict(_obj)
+        clean = _sanitize_item(raw, weights)
+        # пересобираем под входную схему
+        _norm.append(RecommendationIn(**clean))  # type: ignore[name-defined]
+    items = _norm
+    # --- end sanitizer ---
     # 1) Пустой список — ничего не делаем
     if not items:
         return []
