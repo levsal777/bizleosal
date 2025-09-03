@@ -1,0 +1,15 @@
+services:
+  backend:
+    # фиксируем команду запуска (обходит старую CMD из образа)
+    command: ["python","-m","uvicorn","app.main:app","--host","0.0.0.0","--port","8000","--workers","1"]
+
+    # делаем сервис устойчивым
+    restart: unless-stopped
+
+    # healthcheck: ждём, пока поднимется и БД, и приложение
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s

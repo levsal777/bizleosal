@@ -1,0 +1,490 @@
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field, conint
+from typing import Optional, List, Literal, Any, Dict
+from app.db import get_conn
+from app.utils.sorting import apply_sorting
+import json
+
+router = APIRouter(prefix="/companies", tags=["companies"])
+
+# --------- Pydantic-модели ---------
+
+class CompanyCreate(BaseModel):
+    name: str = Field(..., max_length=255)
+    industry: Optional[str] = Field(None, max_length=100)
+    region: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+
+class CompanyOut(BaseModel):
+    id: int
+    name: str
+    industry: Optional[str]
+    region: Optional[str]
+    description: Optional[str]
+
+ModelName = Literal[
+    "swot","pestel","porter","bcg","value_chain","canvas","unit_economics","bsc"
+]
+
+class AnalysisCreate(BaseModel):
+    model: ModelName
+    input_data: Optional[Dict[str, Any]] = None
+
+class AnalysisOut(BaseModel):
+    id: int
+    company_id: int
+    model: ModelName
+
+AreaName = Literal[
+    "overall","swot","pestel","porter","bcg","value_chain","canvas","unit_economics","bsc"
+]
+
+class RecommendationIn(BaseModel):
+    area: AreaName
+    title: str = Field(..., max_length=255)
+    rationale: Optional[str] = None
+    steps: Optional[List[str]] = None
+    impact: conint(ge=1, le=5)
+    effort: conint(ge=1, le=5)
+    priority_note: Optional[str] = None
+    analysis_id: Optional[int] = None
+
+class RecommendationCreated(BaseModel):
+    id: int
+    area: AreaName
+    title: str
+    impact: int
+    effort: int
+    priority_score: float
+
+class RecommendationOut(BaseModel):
+    id: int
+    area: AreaName
+    title: str
+    impact: conint(ge=1, le=5)
+    effort: conint(ge=1, le=5)
+
+class KPIOut(BaseModel):
+    id: int
+    name: str
+    unit: Optional[str]
+    target_value: Optional[float]
+    current_value: Optional[float]
+    status: Optional[Literal["good","watch","bad"]]
+
+# --------- Роуты ---------
+
+@router.post("", response_model=CompanyOut)
+def create_company(body: CompanyCreate, sort: str | None = Query(None, alias='sort')):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO company (name, industry, region, description)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id, name, industry, region, description
+                """,
+                (body.name, body.industry, body.region, body.description),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(500, "Failed to create company")
+            return {
+                "id": row[0], "name": row[1], "industry": row[2],
+                "region": row[3], "description": row[4]
+            }
+
+@router.get("", response_model=List[CompanyOut])
+def list_companies(sort: str | None = Query(None, alias='sort')):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, industry, region, description FROM company ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0], "name": r[1], "industry": r[2],
+                    "region": r[3], "description": r[4]
+                }
+                for r in rows
+            ]
+
+@router.post("/{company_id}/analyses", response_model=AnalysisOut)
+def create_analysis(company_id: int, body: AnalysisCreate, sort: str | None = Query(None, alias='sort')):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM company WHERE id=%s", (company_id,))
+            if cur.fetchone() is None:
+                raise HTTPException(404, "Company not found")
+
+            input_json = json.dumps(body.input_data) if body.input_data else None
+            cur.execute(
+                """
+                INSERT INTO analysis (company_id, model, input_data)
+                VALUES (%s, %s, %s::jsonb)
+                RETURNING id, company_id, model
+                """,
+                (company_id, body.model, input_json),
+            )
+            row = cur.fetchone()
+            return {"id": row[0], "company_id": row[1], "model": row[2]}
+
+@router.post("/{company_id}/recommendations/bulk", response_model=List[RecommendationCreated])
+def create_recommendations_bulk(company_id: int, items: List[RecommendationIn], sort: str | None = Query(None, alias='sort')):
+    # 1) Пустой список — ничего не делаем
+    if not items:
+        return []
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # 2) Проверяем, что компания существует
+            cur.execute("SELECT 1 FROM company WHERE id=%s", (company_id,))
+            if cur.fetchone() is None:
+                raise HTTPException(404, "Company not found")
+
+            # 3) Готовим значения для массовой вставки
+            payload = []
+            for it in items:
+                steps_json = json.dumps(it.steps) if getattr(it, "steps", None) else None
+                payload.append((
+                    company_id,
+                    getattr(it, "analysis_id", None),
+                    it.area,
+                    it.title,
+                    it.rationale,
+                    steps_json,  # передаём как текст JSON; ниже приведём к jsonb
+                    it.impact,
+                    it.effort,
+                    getattr(it, "priority_note", None),
+                ))
+
+            # 4) Ещё одна защита от пустого ввода
+            if not payload:
+                return []
+
+            # 5) Строим VALUES с плейсхолдерами, 6-я колонка — явный CAST к jsonb
+            row_ph = "(%s,%s,%s,%s,%s,CAST(%s AS jsonb),%s,%s,%s)"
+            values_ph = ",".join([row_ph] * len(payload))
+
+            sql = (
+                "INSERT INTO recommendation "
+                "(company_id, analysis_id, area, title, rationale, steps, impact, effort, priority_note) "
+                f"VALUES {values_ph} "
+                "RETURNING id, area, title, impact, effort, priority_score"
+            )
+
+            # 6) «Расплющиваем» список кортежей в один список параметров
+            params = [v for row in payload for v in row]
+
+            # 7) Выполняем и возвращаем результат
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0], "area": r[1], "title": r[2],
+                    "impact": r[3], "effort": r[4],
+                    "priority_score": float(r[5]) if r[5] is not None else 0.0
+                }
+                for r in rows
+            ]
+
+@router.get("/{company_id}/recommendations/top", response_model=List[RecommendationCreated])
+def list_recommendations_top(company_id: int, limit: int = 20, sort: str | None = Query(None, alias='sort')):
+    # простая защита от странных значений
+    if limit < 1 or limit > 200:
+        limit = 20
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, area, title, impact, effort, priority_score
+                FROM recommendation
+                WHERE company_id = %s
+                ORDER BY priority_score DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (company_id, limit),
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "area": r[1],
+                    "title": r[2],
+                    "impact": r[3],
+                    "effort": r[4],
+                    "priority_score": float(r[5]) if r[5] is not None else 0.0,
+                }
+                for r in rows
+            ]
+
+# --------- Пагинация: модели ответа ---------
+class CompanyPagedOut(BaseModel, sort: str | None = Query(None, alias='sort')):
+    items: List[CompanyOut]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+@router.get("/paged", response_model=CompanyPagedOut)
+def list_companies_paged(
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    sort: str = "-id",  # минус = по убыванию
+, sort: str | None = Query(None, alias='sort')):
+    # 1) Нормализуем параметры
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 100:
+        page_size = 20
+
+    # Разрешённые поля сортировки (чтобы не было инъекций)
+    allowed_sort = {
+        "id": "id",
+        "-id": "id DESC",
+        "name": "name",
+        "-name": "name DESC",
+        "industry": "industry",
+        "-industry": "industry DESC",
+        "region": "region",
+        "-region": "region DESC",
+    }
+    order_by = _order_by_from_sort(sort, allowed_sort, default_sql="id DESC")
+
+    # 2) Собираем WHERE и параметры
+    where_sql = ""
+    params: list = []
+    if q:
+        # Ищем по name, industry, region
+        where_sql = "WHERE (name ILIKE %s OR industry ILIKE %s OR region ILIKE %s)"
+        like = f"%{q}%"
+        params.extend([like, like, like])
+
+    # 3) Считаем total
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM company {where_sql}", params)
+            total = int(cur.fetchone()[0])
+
+            # 4) Берём страницу данных
+            offset = (page - 1) * page_size
+            data_sql = (
+                "SELECT id, name, industry, region, description "
+                f"FROM company {where_sql} "
+                f"ORDER BY {order_by} "
+                "LIMIT %s OFFSET %s"
+            )
+            cur.execute(data_sql, params + [page_size, offset])
+            rows = cur.fetchall()
+
+    # 5) Считаем кол-во страниц
+    pages = (total + page_size - 1) // page_size if total > 0 else 1
+
+    items = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "industry": r[2],
+            "region": r[3],
+            "description": r[4],
+        }
+        for r in rows
+    ]
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": pages,
+    }
+
+# --------- Пагинация рекомендаций: модель ответа ---------
+class RecommendationPagedOut(BaseModel, sort: str | None = Query(None, alias='sort')):
+    items: List[RecommendationCreated]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+@router.get("/{company_id}/recommendations/paged", response_model=RecommendationPagedOut)
+def list_recommendations_paged(
+    company_id: int,
+    area: Optional[AreaName] = None,
+    impact_min: Optional[int] = None,
+    impact_max: Optional[int] = None,
+    effort_min: Optional[int] = None,
+    effort_max: Optional[int] = None,
+    sort: str = "-priority",   # по умолчанию: сначала самые приоритетные
+    page: int = 1,
+    page_size: int = 20,
+, sort: str | None = Query(None, alias='sort')):
+    # 1) Нормализуем параметры страницы
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 100:
+        page_size = 20
+
+    # 2) Белый список сортировок (чтобы не было инъекций)
+    allowed_sort = {
+        "id": "id",
+        "-id": "id DESC",
+        "priority": "priority_score",
+        "-priority": "priority_score DESC NULLS LAST",
+        "impact": "impact",
+        "-impact": "impact DESC",
+        "effort": "effort",
+        "-effort": "effort DESC",
+    }
+    order_by = allowed_sort.get(sort, "priority_score DESC NULLS LAST, id DESC")
+
+    # 3) WHERE-условия и параметры
+    conds = ["company_id = %s"]
+    params: list = [company_id]
+
+    if area is not None:
+        conds.append("area = %s")
+        params.append(area)
+
+    if impact_min is not None:
+        conds.append("impact >= %s")
+        params.append(impact_min)
+    if impact_max is not None:
+        conds.append("impact <= %s")
+        params.append(impact_max)
+
+    if effort_min is not None:
+        conds.append("effort >= %s")
+        params.append(effort_min)
+    if effort_max is not None:
+        conds.append("effort <= %s")
+        params.append(effort_max)
+
+    where_sql = "WHERE " + " AND ".join(conds)
+
+    # 4) Считаем общее количество
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM recommendation {where_sql}", params)
+            total = int(cur.fetchone()[0])
+
+            # 5) Берём одну страницу данных
+            offset = (page - 1) * page_size
+            data_sql = (
+                "SELECT id, area, title, impact, effort, priority_score "
+                f"FROM recommendation {where_sql} "
+                f"ORDER BY {order_by} "
+                "LIMIT %s OFFSET %s"
+            )
+            cur.execute(data_sql, params + [page_size, offset])
+            rows = cur.fetchall()
+
+    pages = (total + page_size - 1) // page_size if total > 0 else 1
+
+    items = [
+        {
+            "id": r[0],
+            "area": r[1],
+            "title": r[2],
+            "impact": r[3],
+            "effort": r[4],
+            "priority_score": float(r[5]) if r[5] is not None else 0.0,
+        }
+        for r in rows
+    ]
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": pages,
+    }
+
+from fastapi import Response
+
+@router.get("/{company_id}/recommendations/export.csv")
+def export_recommendations_csv(
+    company_id: int,
+    area: Optional[AreaName] = None,
+    impact_min: Optional[int] = None,
+    impact_max: Optional[int] = None,
+    effort_min: Optional[int] = None,
+    effort_max: Optional[int] = None,
+    sort: str = "-priority",   # те же правила сортировки, что в paged
+, sort: str | None = Query(None, alias='sort')):
+    # белый список сортировок
+    allowed_sort = {
+        "id": "id",
+        "-id": "id DESC",
+        "priority": "priority_score",
+        "-priority": "priority_score DESC NULLS LAST",
+        "impact": "impact",
+        "-impact": "impact DESC",
+        "effort": "effort",
+        "-effort": "effort DESC",
+    }
+    order_by = allowed_sort.get(sort, "priority_score DESC NULLS LAST, id DESC")
+
+    # собираем WHERE и параметры
+    conds = ["company_id = %s"]
+    params: list = [company_id]
+    if area is not None:
+        conds.append("area = %s")
+        params.append(area)
+    if impact_min is not None:
+        conds.append("impact >= %s"); params.append(impact_min)
+    if impact_max is not None:
+        conds.append("impact <= %s"); params.append(impact_max)
+    if effort_min is not None:
+        conds.append("effort >= %s"); params.append(effort_min)
+    if effort_max is not None:
+        conds.append("effort <= %s"); params.append(effort_max)
+    where_sql = "WHERE " + " AND ".join(conds)
+
+    # выгружаем все подходящие строки (без пагинации)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, area, title, impact, effort, priority_score "
+                f"FROM recommendation {where_sql} "
+                f"ORDER BY {order_by}",
+                params,
+            )
+            rows = cur.fetchall()
+
+    # собираем CSV-текст
+    # заголовки колонок:
+    lines = ["id,area,title,impact,effort,priority_score"]
+    for r in rows:
+        pid = r[0]
+        area_val = r[1] or ""
+        title = (r[2] or "").replace('"','""')
+        impact = r[3] if r[3] is not None else ""
+        effort = r[4] if r[4] is not None else ""
+        prio = float(r[5]) if r[5] is not None else 0.0
+        # CSV-правило: текстовые поля в кавычках, кавычки внутри удваиваем
+        lines.append(f'{pid},{area_val},"{title}",{impact},{effort},{prio}')
+    csv_data = "\n".join(lines) + "\n"
+
+    return Response(
+        content=csv_data,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="recommendations_{company_id}.csv"'
+        },
+    )
+
+# --------- Утилита: собираем ORDER BY из списка полей по белому списку ---------
+from typing import Dict as _Dict  # чтобы не конфликтовало с pydantic Any/Dict
+
+def _order_by_from_sort(sort: str, allowed: _Dict[str, str], default_sql: str) -> str:
+    """
+    Принимает строку вида "-priority,-impact,name", пропускает только разрешённые ключи
+    (из allowed), и склеивает их через запятую. Если ни один не подошёл — возвращает default_sql.
+    """
+    if not sort:
+        return default_sql
+    parts = [p.strip() for p in sort.split(",") if p.strip()]
+    seq = [allowed[p] for p in parts if p in allowed]
+    return ", ".join(seq) if seq else default_sql

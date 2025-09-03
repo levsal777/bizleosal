@@ -351,18 +351,17 @@
       <button id="btnLoadRecs" class="bg-blue-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-700 transition-all">Загрузить</button>
       <button id="btnPrev" class="bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg">← Назад</button>
       <button id="btnNext" class="bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg">Вперёд →</button>
-      <a id="btnCsv" href="#" target="_blank" rel="noopener" class="bg-green-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-green-700 transition-all">Экспорт CSV</a>
+      <a id="btnCsv" href="#" class="bg-green-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-green-700 transition-all">Экспорт CSV</a>
     </div>
 
     <div id="recsList" class="space-y-3"></div>
   </section>
 
 
-  
   <!-- === Live Recommendations JS === -->
   <script>
   (function(){
-    const API_BASE = 'https://api.bizleosal.ru';
+    const API_BASE = 'https://api.bizleosal.ru'; // корень API
 
     const $ = (id) => document.getElementById(id);
     const elCompany = $('recCompanyId'), elArea = $('recArea'), elQ = $('recQ');
@@ -373,20 +372,12 @@
 
     let lastTotal = 0, lastPages = 1;
 
-    const debounce = (fn, ms=400) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-
-    const setPagerButtons = () => {
-      const p = Math.max(1, parseInt(elPage.value || '1', 10));
-      btnPrev.disabled = (p <= 1);
-      btnNext.disabled = (p >= lastPages);
-    };
-
     const buildParams = () => {
       const u = new URLSearchParams();
       const q = (v) => (v===null || v===undefined) ? '' : String(v).trim();
 
-      if (q(elArea.value))   u.set('area', elArea.value);
-      if (q(elQ.value))      u.set('q', elQ.value);
+      if (q(elArea.value)) u.set('area', elArea.value);
+      if (q(elQ.value))    u.set('q', elQ.value);
       if (q(elImpMin.value)) u.set('impact_min', elImpMin.value);
       if (q(elImpMax.value)) u.set('impact_max', elImpMax.value);
       if (q(elEffMin.value)) u.set('effort_min', elEffMin.value);
@@ -403,20 +394,16 @@
 
       if (!Array.isArray(data.items) || data.items.length === 0) {
         elList.innerHTML = '<div class="text-gray-500">Нет записей.</div>';
-        setPagerButtons();
         return;
       }
       const esc = (s) => String(s ?? '').replace(/[&<>"'`=\/]/g, t => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'})[t]);
-      const cards = data.items.map(it => `
+      elList.innerHTML = data.items.map(it => `
         <div class="bg-gray-50 p-4 rounded-lg border">
           <div class="text-xs text-gray-500 mb-1">ID: <strong>${esc(it.id)}</strong> • Модель: <strong>${esc(it.area)}</strong></div>
           <h3 class="font-semibold text-lg text-blue-700">${esc(it.title)}</h3>
-          <div class="text-xs text-gray-600 mt-2">Влияние: <strong>${esc(it.impact)}/5</strong> • Сложность: <strong>${esc(it.effort)}/5</strong> • Приоритет: <strong>${esc(it.priority_score ?? it.priority ?? '')}</strong></div>
+          <div class="text-xs text-gray-600 mt-2">Impact: <strong>${esc(it.impact)}/5</strong> • Effort: <strong>${esc(it.effort)}/5</strong> • Priority: <strong>${esc(it.priority_score ?? it.priority ?? '')}</strong></div>
         </div>
-      `).join('');
-      const meta = `<div class="text-sm text-gray-500 mt-2">Стр ${esc(data.page ?? 1)} из ${esc(lastPages)} • Всего: ${esc(lastTotal)}</div>`;
-      elList.innerHTML = cards + meta;
-      setPagerButtons();
+      `).join('') + `<div class="text-sm text-gray-500 mt-2">Всего: ${lastTotal}, страниц: ${lastPages}</div>`;
     };
 
     const updateCsvLink = () => {
@@ -433,12 +420,9 @@
         if (pageDelta !== 0) {
           const cur = Math.max(1, parseInt(params.get('page')||'1',10)) + pageDelta;
           params.set('page', Math.max(1, cur));
-          elPage.value = params.get('page');
         }
         updateCsvLink();
-        setPagerButtons();
         const res = await fetch(API_BASE + `/companies/${cid}/recommendations/paged?` + params.toString());
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         renderList(data);
         if (typeof data.page === 'number') elPage.value = data.page;
@@ -447,30 +431,18 @@
       }
     };
 
-    // События
     btnLoad.addEventListener('click', ()=> load(0));
     btnPrev.addEventListener('click', ()=> load(-1));
     btnNext.addEventListener('click', ()=> load(+1));
 
-    // Обновление ссылки CSV при изменении фильтров
-    [elCompany, elArea, elQ, elImpMin, elImpMax, elEffMin, elEffMax, elSort, elPageSize].forEach(el=>{
+    [elCompany, elArea, elQ, elImpMin, elImpMax, elEffMin, elEffMax, elSort].forEach(el=>{
       el.addEventListener('change', updateCsvLink);
       el.addEventListener('keyup', updateCsvLink);
-      // Нажатие Enter запускает загрузку
-      el.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') { ev.preventDefault(); load(0); } });
     });
 
-    // Автопоиск по q с задержкой (удобно)
-    elQ.addEventListener('keyup', debounce(()=> load(0), 450));
-
-    // Инициализация
     updateCsvLink();
-    setPagerButtons();
-    // Можно включить авто-загрузку:
-    // load(0);
   })();
   </script>
-
 
 </body>
 </html>
