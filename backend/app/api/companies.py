@@ -1,3 +1,4 @@
+from ..services.recs_generator import _sanitize_item, _merge_weights_from_env, DEFAULT_AREA_WEIGHTS
 from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel, Field, conint
 from typing import Optional, List, Literal, Any, Dict
