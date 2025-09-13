@@ -1,4 +1,4 @@
-from app.api.companies import router as companies_router
+from .api.companies import router as companies_router
 # /srv/apps/myapp/backend/app/main.py
 # Biz Analytics API — главный файл приложения
 
@@ -13,8 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api.routes.ai import router as ai_router
-from app.schemas.recommendations import ErrorResponse
+from .api.routes.ai import router as ai_router
+from .schemas.recommendations import ErrorResponse
 
 # --- psycopg3 для /readyz ---
 try:

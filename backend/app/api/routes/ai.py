@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, status, Request
 from datetime import datetime, timezone
-from app.schemas.recommendations import (
+from ...schemas.recommendations import (
     AiCompleteRequest, AiCompleteResponse, RecItem, KPI, Meta, ErrorResponse
 )
-from app.services.recommendation_service import build_recommendations
+from ...services.recommendation_service import build_recommendations
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 

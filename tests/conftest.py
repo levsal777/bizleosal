@@ -1,13 +1,11 @@
 import pytest
 from starlette.testclient import TestClient
+import os
 
-try:
-    from app.main import app  # если есть полноценный app
-except Exception:
-    from fastapi import FastAPI
-    from app.api.companies import router
-    app = FastAPI()
-    app.include_router(router)
+os.environ["API_KEY"] = "dev"
+os.environ["DATABASE_URL"] = "postgresql://test:test@test/test"
+
+from backend.app.main import app
 
 @pytest.fixture
 def api_client():

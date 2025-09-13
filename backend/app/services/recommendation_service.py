@@ -1,9 +1,9 @@
 from math import isfinite
 from typing import List
-from app.schemas.recommendations import (
+from ..schemas.recommendations import (
     AiCompleteRequest, AiCompleteResponse, RecItem, KPI, Meta
 )
-from app.clients.llm_client import generate_raw_recommendations
+from ..clients.llm_client import generate_raw_recommendations
 
 def _score(impact: int, effort: int) -> float:
     # простая метрика приоритета: impact / effort

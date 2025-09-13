@@ -1,10 +1,16 @@
-from ..services.recs_generator import _sanitize_item, _merge_weights_from_env, DEFAULT_AREA_WEIGHTS
-from fastapi import APIRouter, HTTPException, Query, Path
-from pydantic import BaseModel, Field, conint
-from typing import Optional, List, Literal, Any, Dict
-from app.db import get_conn
-from app.utils.sorting import apply_sorting
 import json
+import urllib.request
+import urllib.error
+from uuid import uuid4
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Query, Path, Response, Body
+from pydantic import BaseModel, Field, conint, ValidationError
+from typing import Optional, List, Literal, Any, Dict
+
+from ..db import get_conn
+from ..services.recommendation_service import build_recommendations
+from ..schemas.recommendations import AiCompleteRequest, Company as CompanySchema
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -76,7 +82,7 @@ class KPIOut(BaseModel):
 # --------- Роуты ---------
 
 @router.post("", response_model=CompanyOut)
-def create_company(body: CompanyCreate, sort: str | None = Query(None, alias='sort')):
+def create_company(body: CompanyCreate):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -96,11 +102,23 @@ def create_company(body: CompanyCreate, sort: str | None = Query(None, alias='so
             }
 
 @router.get("", response_model=List[CompanyOut])
-def list_companies(sort: str | None = Query(None, alias='sort')):
+def list_companies(sort: str | None = Query("-id", alias='sort')):
+    allowed_sort = {
+        "id": "id",
+        "-id": "id DESC",
+        "name": "name",
+        "-name": "name DESC",
+        "industry": "industry",
+        "-industry": "industry DESC",
+        "region": "region",
+        "-region": "region DESC",
+    }
+    order_by = _order_by_from_sort(sort, allowed_sort, default_sql="id DESC")
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, industry, region, description FROM company ORDER BY id DESC"
+                f"SELECT id, name, industry, region, description FROM company ORDER BY {order_by}"
             )
             rows = cur.fetchall()
             return [
@@ -112,7 +130,7 @@ def list_companies(sort: str | None = Query(None, alias='sort')):
             ]
 
 @router.post("/{company_id}/analyses", response_model=AnalysisOut)
-def create_analysis(company_id: int, body: AnalysisCreate, sort: str | None = Query(None, alias='sort')):
+def create_analysis(company_id: int, body: AnalysisCreate):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM company WHERE id=%s", (company_id,))
@@ -402,8 +420,6 @@ def list_recommendations_paged(
         "pages": pages,
     }
 
-from fastapi import Response, Body, HTTPException, Path
-
 @router.get("/{company_id}/recommendations/export.csv")
 def export_recommendations_csv(
     company_id: int,
@@ -436,17 +452,21 @@ def export_recommendations_csv(
         conds.append("area = %s")
         params.append(area)
     if impact_min is not None:
-        conds.append("impact >= %s"); params.append(impact_min)
+        conds.append("impact >= %s")
+        params.append(impact_min)
     if impact_max is not None:
-        conds.append("impact <= %s"); params.append(impact_max)
+        conds.append("impact <= %s")
+        params.append(impact_max)
     if effort_min is not None:
-        conds.append("effort >= %s"); params.append(effort_min)
+        conds.append("effort >= %s")
+        params.append(effort_min)
     if effort_max is not None:
-        conds.append("effort <= %s"); params.append(effort_max)
-        if q:
+        conds.append("effort <= %s")
+        params.append(effort_max)
+    if q:
         conds.append("(title ILIKE %s)")
         params.append(f"%{q}%")
-where_sql = "WHERE " + " AND ".join(conds)
+    where_sql = "WHERE " + " AND ".join(conds)
 
     # выгружаем все подходящие строки (без пагинации)
     with get_conn() as conn:
@@ -482,9 +502,6 @@ where_sql = "WHERE " + " AND ".join(conds)
     )
 
 # --------- Утилита: собираем ORDER BY из списка полей по белому списку ---------
-import json, urllib.request, urllib.error
-from uuid import uuid4
-
 from typing import Dict as _Dict  # чтобы не конфликтовало с pydantic Any/Dict
 
 def _order_by_from_sort(sort: str, allowed: _Dict[str, str], default_sql: str) -> str:
@@ -505,45 +522,35 @@ def generate_recommendations(
     body: dict = Body(..., description="Параметры генерации: company/goals/models/limit/lang/client_request_id")
 ):
     """
-    1) Вызывает внутренний ИИ-эндпоинт /v1/ai/complete
+    1) Вызывает сервис генерации рекомендаций
     2) Преобразует элементы в формат таблицы recommendation
     3) Сохраняет записи в БД и возвращает счетчик/превью
     """
-    # --- соберём полезную нагрузку для /v1/ai/complete ---
-    company = (body or {}).get("company") or {}
-    goals   = (body or {}).get("goals")   or []
-    models  = (body or {}).get("models")  or ["swot","pestel","porter","bcg","value_chain","canvas","unit_economics"]
-    limit   = int((body or {}).get("limit") or 5)
-    lang    = (body or {}).get("lang") or "ru"
-    rid     = (body or {}).get("client_request_id") or str(uuid4())
+    # --- соберём полезную нагрузку для сервиса ---
+    company_data = (body or {}).get("company") or {}
 
-    payload = {
-        "company": {
-            "name":   company.get("name")   or f"Company {company_id}",
-            "industry": company.get("industry") or "general",
-            "region": company.get("region") or "RU",
-        },
-        "goals": goals,
-        "models": models,
-        "limit": limit,
-        "lang": lang,
-        "client_request_id": rid,
-    }
-
-    # --- вызов внутреннего эндпоинта (через localhost) ---
-    url = "http://127.0.0.1:8000/v1/ai/complete"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type":"application/json","Accept-Language":lang},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            ai = json.loads(resp.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as e:
-        msg = e.read().decode("utf-8", "ignore")
-        raise HTTPException(status_code=e.code, detail=f"AI error: {msg or e.reason}")
+        payload = AiCompleteRequest(
+            company=CompanySchema(
+                name=company_data.get("name") or f"Company {company_id}",
+                industry=company_data.get("industry") or "general",
+                region=company_data.get("region") or "RU",
+            ),
+            goals=(body or {}).get("goals") or [],
+            models=(body or {}).get("models") or ["swot","pestel","porter","bcg","value_chain","canvas","unit_economics"],
+            limit=int((body or {}).get("limit") or 5),
+            lang=(body or {}).get("lang") or "ru",
+            client_request_id=(body or {}).get("client_request_id") or str(uuid4()),
+        )
+    except (ValidationError, TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
+
+    # --- вызов сервиса ---
+    try:
+        ai_response = asyncio.run(build_recommendations(payload))
+        ai = ai_response.dict()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"AI service error: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
 
@@ -595,124 +602,6 @@ def generate_recommendations(
         "meta": ai.get("meta"),
     }
 
-# --- AUTOGENERATED: recommendations/generate ---
-from typing import List
-from fastapi import HTTPException, Depends, Path
-from sqlalchemy.orm import Session
-try:
-    # используем ваш уже существующий get_db, путь может отличаться — поправьте при необходимости
-    from app.db.session import get_db  # noqa: F401
-except Exception as e:  # на случай иного пути/имени — покажем понятную ошибку
-    raise
-
-try:
-    from app.db import models  # ожидаем, что есть models.Recommendation
-except Exception as e:
-    raise
-
-@router.post("/{company_id}/recommendations/generate")
-def generate_recommendations(company_id: int, db: Session = Depends(get_db)):
-    """
-    Минимальная реализация: создаёт несколько типовых рекомендаций,
-    чтобы проверить маршрут и факт вставки в БД.
-    Позже сюда можно подставить вызов AI/шаблонов, а вставку — перевести на upsert.
-    """
-    try:
-        seed_items = [
-            dict(area="overall", title="Запустить перформанс-маркетинг",
-                 rationale="Низкий поток лидов; нужен платный трафик и ретаргет",
-                 steps=["Запустить VK/РСЯ", "Настроить ретаргет", "Сквозная аналитика"],
-                 impact=5, effort=3, priority_score=100.0),
-            dict(area="unit_economics", title="Снизить COGS на 7%",
-                 rationale="Высокая себестоимость ухудшает маржу",
-                 steps=["Ревизия закупок", "Переговоры с поставщиками", "Стандартизация рецептур"],
-                 impact=4, effort=2, priority_score=100.0),
-        ]
-
-        created = []
-        for it in seed_items:
-            rec = models.Recommendation(
-                company_id=company_id,
-                area=it["area"],
-                title=it["title"],
-                rationale=it["rationale"],
-                steps=it["steps"],
-                impact=it["impact"],
-                effort=it["effort"],
-                priority_score=it["priority_score"],
-            )
-            db.add(rec)
-            created.append(rec)
-
-        db.commit()
-        for rec in created:
-            db.refresh(rec)
-
-        return {
-            "company_id": company_id,
-            "inserted": len(created),
-            "ids": [r.id for r in created],
-        }
-    except Exception as e:
-        # Преобразуем необработанные исключения в понятный HTTP-ответ
-        raise HTTPException(status_code=500, detail=f"generate failed: {e}")
-# --- /AUTOGENERATED ---
-
-# --- AUTOGENERATED: /companies/{company_id}/recommendations/generate ---
-from fastapi import HTTPException, Depends, Path
-from sqlalchemy.orm import Session
-try:
-    # используем тот же get_db, что уже применяется в файле
-    from app.db.session import get_db  # если у вас другой import, оставьте как вверху файла
-except Exception:
-    pass
-
-try:
-    from app.db import models  # ожидаем models.Recommendation
-except Exception:
-    pass
-
-@router.post("/{company_id}/recommendations/generate")
-def generate_recommendations(company_id: int, db: Session = Depends(get_db)):
-    """
-    Минимальная версия: вставляет 2 тестовые рекомендации, чтобы подтвердить маршрут и запись в БД.
-    Позже замените генерацией (AI/шаблоны) и upsert-логикой.
-    """
-    try:
-        seed_items = [
-            dict(area="overall", title="Запустить перформанс-маркетинг",
-                 rationale="Низкий поток лидов; нужен платный трафик и ретаргет",
-                 steps=["Запуск VK/РСЯ", "Ретаргет", "Сквозная аналитика"],
-                 impact=5, effort=3, priority_score=100.0),
-            dict(area="unit_economics", title="Снизить COGS на 7%",
-                 rationale="Высокая себестоимость ухудшает маржу",
-                 steps=["Ревизия закупок", "Переговоры с поставщиками", "Стандартизация"],
-                 impact=4, effort=2, priority_score=100.0),
-        ]
-
-        created_ids = []
-        for it in seed_items:
-            rec = models.Recommendation(
-                company_id=company_id,
-                area=it["area"],
-                title=it["title"],
-                rationale=it["rationale"],
-                steps=it["steps"],
-                impact=it["impact"],
-                effort=it["effort"],
-                priority_score=it["priority_score"],
-            )
-            db.add(rec)
-            db.flush()
-            created_ids.append(rec.id)
-
-        db.commit()
-        return {"company_id": company_id, "inserted": len(created_ids), "ids": created_ids}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"generate failed: {e}")
-# --- /AUTOGENERATED ---
-
 @router.delete("/{company_id}/recommendations/{rec_id}")
 def delete_recommendation(company_id: int, rec_id: int):
     with get_conn() as conn:
@@ -726,52 +615,3 @@ def delete_recommendation(company_id: int, rec_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="not found")
     return {"deleted": 1}
-
-
-# --- autogenerated: generate endpoint ---
-from typing import List, Dict
-from fastapi import status
-from fastapi.responses import JSONResponse
-import os, json, urllib.request
-
-def _demo_items() -> List[Dict]:
-    # Минимальный набор «реалистичных» рекомендаций под ваши поля
-    return [
-        {"area": "overall",         "title": "Запустить перформанс-маркетинг",      "rationale": "Нужен стабильный поток лидов", "steps": ["VK РСЯ","ретаргет","сквозная аналитика"], "impact": 5, "effort": 3},
-        {"area": "unit_economics",  "title": "Снизить COGS на 7%",                   "rationale": "Высокая себестоимость",         "steps": ["пересмотр прайса","альтернативные поставщики"],        "impact": 4, "effort": 2},
-        {"area": "swot",            "title": "Усилить сильные стороны в SMM",       "rationale": "Хорошие отзывы — используем",    "steps": ["кейсы","UGC","реферальная программа"],                 "impact": 3, "effort": 2},
-        {"area": "porter",          "title": "Снизить силу поставщиков",            "rationale": "1-2 ключевых поставщика",        "steps": ["тендер","альтернатива","SKU-миграция"],                 "impact": 4, "effort": 3},
-        {"area": "bcg",             "title": "Вывести «Собаки» и усилить «Звезды»", "rationale": "Низкий оборот 20% ассортимента",  "steps": ["ABC/XYZ-анализ","чистка каталога"],                     "impact": 3, "effort": 2},
-    ]
-
-@router.post("/{company_id}/recommendations/generate", status_code=status.HTTP_201_CREATED)
-def generate_recommendations(company_id: int = Path(..., ge=1)):
-    """
-    Генератор рекомендаций (dev): собирает демо-набор и вызывает локальный bulk.
-    Прод: заменить на реальную бизнес-логику (AI/правила + запись в БД напрямую).
-    """
-    url = f"http://127.0.0.1:8000/companies/{company_id}/recommendations/bulk"
-    payload = json.dumps(_demo_items()).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": os.getenv("API_KEY", "dev"),
-    }
-    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = resp.read()
-            code = resp.status
-            try:
-                out = json.loads(body.decode("utf-8")) if body else {"ok": True}
-            except Exception:
-                out = {"ok": True}
-            return JSONResponse(status_code=code, content=out)
-    except Exception as e:
-        # На dev полезно вернуть понятную ошибку
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            content={"ok": False, "error": str(e)})
-# --- end autogenerated ---
-
-@router.post("/{company_id}/recommendations/generate", status_code=201)
-def generate_recommendations(company_id: int = Path(..., ge=1)):
-    return {"ok": True, "company_id": company_id, "generated": 0}
