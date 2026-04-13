@@ -1,0 +1,6 @@
+date,channel,utm_campaign,impressions,clicks,installs,purchases,revenue,cost
+2026-03-01,facebook,spring_sale,10000,500,120,10,500.00,800.00
+2026-03-02,google,spring_sale,8000,360,90,8,400.00,640.00
+2026-03-03,telegram,spring_sale,2000,200,60,5,250.00,200.00
+2026-03-04,facebook,spring_sale,12000,600,140,12,600.00,960.00
+2026-03-05,google,spring_sale,9000,450,100,9,450.00,720.00

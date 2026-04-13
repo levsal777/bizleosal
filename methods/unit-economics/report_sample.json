@@ -1,0 +1,44 @@
+[
+  {
+    "channel": "facebook",
+    "impressions": 22000,
+    "clicks": 1100,
+    "purchases": 22,
+    "revenue": 1100.0,
+    "cost": 1760.0,
+    "ctr": 0.05,
+    "cpc": 1.6,
+    "cac": 80.0,
+    "aov": 50.0,
+    "roas": 0.625,
+    "recommendation": "Pause or revisit creative"
+  },
+  {
+    "channel": "google",
+    "impressions": 17000,
+    "clicks": 810,
+    "purchases": 17,
+    "revenue": 850.0,
+    "cost": 1360.0,
+    "ctr": 0.047647058823529805,
+    "cpc": 1.6790123456790124,
+    "cac": 80.0,
+    "aov": 50.0,
+    "roas": 0.625,
+    "recommendation": "Pause or revisit creative"
+  },
+  {
+    "channel": "telegram",
+    "impressions": 2000,
+    "clicks": 200,
+    "purchases": 5,
+    "revenue": 250.0,
+    "cost": 200.0,
+    "ctr": 0.1,
+    "cpc": 1.0,
+    "cac": 40.0,
+    "aov": 50.0,
+    "roas": 1.25,
+    "recommendation": "Monitor / optimize"
+  }
+]
