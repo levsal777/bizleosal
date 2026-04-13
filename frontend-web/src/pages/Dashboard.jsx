@@ -17,7 +17,7 @@ export default function Dashboard(){
           <li>PESTEL</li>
           <li>Porter's Five Forces</li>
           <li>McKinsey 7S</li>
-          <li>Unit Economics</li>
+          <li><a href="/unit-economics.html">Unit Economics (open)</a></li>
           <li>AARRR</li>
           <li>RFM</li>
           <li>BCG Matrix</li>
