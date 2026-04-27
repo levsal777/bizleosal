@@ -1,0 +1,19 @@
+{
+  "name": "bizleosal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static MVP landing with HTML/CSS quality checks",
+  "scripts": {
+    "lint:html": "htmlhint index.html",
+    "lint:css": "stylelint \"css/**/*.css\"",
+    "format:check": "prettier --check \"**/*.{html,css,md,json,yml,yaml}\"",
+    "format": "prettier --write \"**/*.{html,css,md,json,yml,yaml}\"",
+    "lint": "npm run lint:html && npm run lint:css"
+  },
+  "devDependencies": {
+    "htmlhint": "^1.7.1",
+    "prettier": "^3.6.2",
+    "stylelint": "^16.25.0",
+    "stylelint-config-standard": "^39.0.1"
+  }
+}
